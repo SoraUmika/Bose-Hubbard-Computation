@@ -48,7 +48,7 @@ function Hamiltonian = Heisenberg_Hamiltonian(N)
         end
     end
 
-    J = -1;
+    J = -2;
     Hamiltonian = zeros(D,D);
     for i=1: D
         for j=1: D
@@ -63,9 +63,9 @@ function Hamiltonian = Heisenberg_Hamiltonian(N)
                 value_2 = 0.5 * Bra_Ket(basis_a, S_p(index, S_m(index+1, basis_b)));
                 value_3 = 0.5 * Bra_Ket(basis_a, S_m(index, S_p(index+1, basis_b)));
                 kth_contribution = value_1 + value_2 +value_3;
-                Hamiltonian(i,j) = Hamiltonian(i,j) + kth_contribution;
-                
+                Hamiltonian(i,j) = Hamiltonian(i,j) + kth_contribution;      
             end
+            Hamiltonian(i,j) = -J*Hamiltonian(i,j);
         end     
     end 
 end
