@@ -11,7 +11,7 @@ function [Site_Num, Energies] = DMRG_Heisenberg(m,target_site_num)
     S_mA = S_m;
     I_dA = I_d;
     H_A = zeros(2);
-    J = -1;
+    J = -2;
     Energy = -0.75;
     
     %number of sites = 2*cycle_count+2
@@ -20,7 +20,7 @@ function [Site_Num, Energies] = DMRG_Heisenberg(m,target_site_num)
     Site_Num = zeros(cycle_count,1);
     for cycle=1: cycle_count
         %Now we add a site to block A, and we find the operators of block A + site
-        H_A = kron(H_A,I_d) + (kron(S_zA, S_z) + 0.5*(kron(S_pA, S_m) + ...
+        H_A = kron(H_A,I_d) -J*(kron(S_zA, S_z) + 0.5*(kron(S_pA, S_m) + ...
             kron(S_mA, S_p))); 
 
         S_zA = kron(I_dA, S_z);
@@ -29,8 +29,8 @@ function [Site_Num, Energies] = DMRG_Heisenberg(m,target_site_num)
         I_dA = kron(I_dA, I_d);
 
         %Formulate the superblock using reflection symmetry
-        H_superBlock = kron(H_A, I_dA) + kron(I_dA,H_A) + ...
-            (0.5*(kron(S_pA, S_mA) + kron(S_mA, S_pA)) + kron(S_zA, S_zA));
+        H_superBlock = kron(H_A, I_dA) + kron(I_dA,H_A) - ...
+            J*(0.5*(kron(S_pA, S_mA) + kron(S_mA, S_pA)) + kron(S_zA, S_zA));
         H_superBlock = 0.5*(H_superBlock+H_superBlock');
 
         %Getting the ground state from exat diagonalization
