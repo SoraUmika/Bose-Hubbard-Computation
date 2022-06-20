@@ -66,7 +66,6 @@ function Hamiltonian = Heisenberg_Hamiltonian(N)
                 Hamiltonian(i,j) = Hamiltonian(i,j) + kth_contribution;      
             end
             Hamiltonian(i,j) = -J*Hamiltonian(i,j);
-        end     
-    end 
+        end
+    end
 end
-
