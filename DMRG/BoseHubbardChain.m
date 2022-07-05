@@ -4,7 +4,7 @@ classdef BoseHubbardChain
         U
         mu
         N
-        open_bound
+        bound_cond
         d
         single_site_QNum
         n_op
@@ -13,14 +13,14 @@ classdef BoseHubbardChain
     end
     
     methods
-        function self = BoseHubbardChain(N, U, mu, t, open_boundary_cond)           
+        function self = BoseHubbardChain(N, U, mu, t, bound_cond)           
             %Bose Hubbard Model Parrameters
             self.t = t;
             self.U = U;
             self.mu = mu;
             
             %open_bound=1 => open boundary, open_bound=0 => closed boundary
-            self.open_bound = open_boundary_cond;
+            self.bound_cond = bound_cond;
             self.N = N;
             
             %single site dimension
@@ -39,26 +39,28 @@ classdef BoseHubbardChain
             %single site operators
             self.n_op = diag(ndiag);
             self.b_op = diag(sqrt(ndiag(2:self.d)),1);
-            self.H_op = diag(0.5 * U * ndiag .* (ndiag - 1) - mu * ndiag);            
+            self.H_op = diag(U/2 * ndiag .* (ndiag - 1) - mu * ndiag);            
         end
         
-        %A block consists of four parameters: operator list basis_size, 
+        %A block consists of four parameters: operator list, basis_size, 
         %length, and possible quantum numbers with each index "i" marking the
         %ith basis vector. 
         
         %here we initialize the block for a single site
         function block = InitSingleSiteBlock(self)
             block.op_list = containers.Map;
-            if self.open_bound    
+            if self.bound_cond == BoundCond.open
                 block.op_list('H') = sparse(self.H_op); 
                 block.op_list('conn_n') = sparse(self.n_op); 
                 block.op_list('conn_b') = sparse(self.b_op); 
-            else        
+            elseif self.bound_cond == BoundCond.periodic
                 block.op_list('H') = sparse(self.H_op); 
-                block.op_list('l_n') = sparse(self.n_op); 
-                block.op_list('l_b') = sparse(self.b_op); 
-                block.op_list('r_n') = sparse(self.n_op); 
-                block.op_list('r_b') = sparse(self.b_op); 
+                block.op_list('l_n') = sparse(self.n_op);
+                block.op_list('r_n') = sparse(self.n_op);
+                block.op_list('l_b') = sparse(self.b_op);
+                block.op_list('r_b') = sparse(self.b_op);
+            else
+                fprintf("Error: No valid boundary condition! \n");
             end        
             block.basis_size = self.d;
             block.basis_QNum = self.single_site_QNum;
@@ -72,19 +74,37 @@ classdef BoseHubbardChain
         
         %enlarge the block by adding a single site by calculating the 
         %corresponding block parameters. 
-        function enlarged_block = EnlargeBlock(self, block)
-            enlarged_block.op_list = containers.Map;
-            if self.open_bound
-                enlarged_block.op_list('H') = sparse(kron(block.op_list('H'), eye(self.d)) ...
-                    + kron(eye(block.basis_size), self.H_op) ...
+        function enlarged_block = EnlargeBlock(self, block, direction)
+            new_op_list = containers.Map;
+            block_d = block.basis_size;
+            if self.bound_cond == BoundCond.open
+                new_op_list('H') = sparse(kron(block.op_list('H'), eye(self.d)) ...
+                    + kron(eye(block_d), self.H_op) ...
                     + self.SiteSite_H(block.op_list('conn_b'),self.b_op));
-                enlarged_block.op_list('conn_b') = sparse(kron(eye(block.basis_size), self.b_op));
-                enlarged_block.op_list('conn_n') = sparse(kron(eye(block.basis_size), self.n_op));
-            else 
-                fprintf("closed boundary condition currently not avaiable");
-                
+                new_op_list('conn_b') = sparse(kron(eye(block_d), self.b_op));
+                new_op_list('conn_n') = sparse(kron(eye(block_d), self.n_op));
+            elseif self.bound_cond == BoundCond.periodic
+                assert(direction == 'l' | direction == 'r');
+                if direction == 'l'
+                    new_op_list('H') = sparse(kron(block.op_list('H'), eye(self.d)) ...
+                        + kron(eye(block_d), self.H_op) ...
+                        + self.SiteSite_H(block.op_list('l_b'), self.b_op));     
+                    new_op_list('l_n') = sparse(kron(eye(block_d), self.n_op));
+                    new_op_list('l_b') = sparse(kron(eye(block_d), self.b_op));
+                    new_op_list('r_n') = sparse(kron(block.op_list('r_n'), eye(self.d)));
+                    new_op_list('r_b') = sparse(kron(block.op_list('r_b'), eye(self.d)));
+                else
+                    new_op_list('H') = sparse(kron(block.op_list('H'), eye(self.d)) ...
+                        + kron(eye(block_d), self.H_op) ...
+                        + self.SiteSite_H(block.op_list('r_b'),self.b_op)); 
+                    new_op_list('l_n') = sparse(kron(block.op_list('l_n'), eye(self.d)));
+                    new_op_list('l_b') = sparse(kron(block.op_list('l_b'), eye(self.d)));   
+                    new_op_list('r_n') = sparse(kron(eye(block_d), self.n_op));
+                    new_op_list('r_b') = sparse(kron(eye(block_d), self.b_op));               
+                end              
             end
-            enlarged_block.basis_size = block.basis_size*self.d;
+            enlarged_block.op_list = new_op_list;
+            enlarged_block.basis_size = block_d*self.d;
             enlarged_block.length = block.length + 1;
             basis_QNum = outerop(block.basis_QNum ,self.single_site_QNum, '+');
             enlarged_block.basis_QNum = reshape(basis_QNum',1,[]);
@@ -93,93 +113,96 @@ classdef BoseHubbardChain
         %construct super block given a system block (or left block) and
         %a environment block (or right block)
         function superBlock_H = ConstructSuperBlock_H(self, sys_block, env_block)
-            if self.open_bound
-               superBlock_H = sparse(kron(sys_block.op_list('H'), eye(env_block.basis_size)) + ...
+            if self.bound_cond == BoundCond.open
+               superBlock_H = kron(sys_block.op_list('H'), eye(env_block.basis_size)) + ...
                    kron(eye(sys_block.basis_size), env_block.op_list('H')) + ...
-                   self.SiteSite_H(sys_block.op_list('conn_b'), env_block.op_list('conn_b')));
-            else
-                fprintf("closed boundary condition currently not avaiable");
+                   self.SiteSite_H(sys_block.op_list('conn_b'), env_block.op_list('conn_b'));
+            elseif self.bound_cond == BoundCond.periodic
+               superBlock_H = kron(sys_block.op_list('H'), eye(env_block.basis_size)) + ...
+                   kron(eye(sys_block.basis_size), env_block.op_list('H')) + ...
+                   self.SiteSite_H(sys_block.op_list('r_b'), env_block.op_list('l_b')) + ...
+                   self.SiteSite_H(sys_block.op_list('l_b'),env_block.op_list('r_b'));
             end
         end
         
-        %This function is currently not complete.
-        function Energy = ExactGsEnergy(self, chain_length)
-            currentBlock = self.InitSingleSiteBlock();
-            Energy = eigs(currentBlock.op_list('H'),1,'smallestreal');
-            
-            for M=1: chain_length-1            
-                D = factorial(self.N+M)/(factorial(self.N)*factorial(M));                     
-                possible_QNum = unique(currentBlock.basis_QNum);
-                restricted_indices = zeros(1,D);  
-                new_basis_QNum = zeros(1,D);
-                current_r_index = 1;
-                for i=1: length(possible_QNum)
-                    QNum = possible_QNum(i);
-                    site_QNum = self.N - QNum;
-                    site_QNum_index = find(self.single_site_QNum == site_QNum, 1);
-                    if ~isempty(site_QNum_index) 
-                        QNum_indices = find(currentBlock.basis_QNum == QNum);
-                        for j=1:length(QNum_indices)
-                          offset = currentBlock.basis_size*(QNum_indices(j)-1);
-                          restricted_indices(current_r_index) = offset ...
-                            + site_QNum_index;
-                          new_basis_QNum(current_r_index) = QNum;
-                          current_r_index = current_r_index + 1;                         
-                        end
-                    end                   
-                end
-                
-                currentBlock = self.EnlargeBlock(currentBlock);
-                
-                currentBlock.basis_size = D;
-                currentBlock.basis_QNum = new_basis_QNum;
-                
-                op_names = keys(currentBlock.op_list);              
-                for i=1: currentBlock.op_list.Count
-                    op_name = op_names(i);
-                    op_matrix = currentBlock.op_list(op_name{1});
-
-                    currentBlock.op_list(op_name{1}) = ...
-                        op_matrix(restricted_indices,restricted_indices);
-
-                end
-                    
-                Energy = eigs(currentBlock.op_list('H'),1,'smallestreal');              
-                
-                fprintf('L=%d, E=%d\n', M+1, Energy);                
-            end
-        end
-        
-        function Hamiltonian = Exact_H(self, M)
+        function basis_vectors = Generate_Basis(self, M)
             D = factorial(self.N+M-1)/(factorial(self.N)*factorial(M-1));
-            basis = Generate_Basis(self.N,M);
-            Hamiltonian = zeros(D,D);
-            for u=1:D
-                for v=1:D
-                    u_vect.c = 1;
-                    u_vect.v = basis(u,:);
-                    v_vect.c = 1;
-                    v_vect.v = basis(v,:);       
-                    element_kinetic = 0;
-                    for i=1:M-1
-                        vect1 = Create_Op(i+1,Annih_Op(i,v_vect));
-                        vect2 = Create_Op(i,Annih_Op(i+1,v_vect));
-                        element_kinetic = element_kinetic + Bra_Ket(u_vect,vect1) + Bra_Ket(u_vect, vect2);
-                    end         
-                    element_int = 0;
-                    element_chem = 0;
-                    for i=1:M
-                        vect1 = Num_Op(i, Num_Op(i,v_vect));
-                        vect2 = Num_Op(i, v_vect);
-                        element_int = element_int + Bra_Ket(u_vect, vect1) - Bra_Ket(u_vect,vect2);
-                        element_chem = element_chem + Bra_Ket(u_vect,vect2);
+            D = round(D);
+            basis_vectors = zeros(D,M);
+            basis_vectors(1,1) = self.N;
+            current_row = 1;
+            while basis_vectors(current_row, M) ~= self.N
+                k = 0;
+                for j = M-1: -1: 1
+                    if basis_vectors(current_row, j) > 0
+                        k = j;
+                        break;
+                    end 
+                end 
+                next_row = current_row + 1;
+                for j = 1: M
+                    if 1 <= j && j <= k-1
+                        basis_vectors(next_row,j) = basis_vectors(current_row,j);
+                    elseif j >= k+2
+                        basis_vectors(next_row,j) = 0;
                     end
-                    element = -self.t*element_kinetic + self.U/2*element_int ...
-                        -self.mu*element_chem;       
-                    Hamiltonian(u,v) = element;
                 end
-            end   
-            Hamiltonian = sparse(Hamiltonian);
+                basis_vectors(next_row, k) = basis_vectors(current_row, k) - 1;
+                basis_vectors(next_row, k+1) = self.N - sum(basis_vectors(next_row, 1:k));
+                current_row = next_row; 
+            end
+        end 
+        
+        function [Gs, Energy] = ExactGsEnergy(self, M)
+            basis = self.Generate_Basis(M);
+            D = factorial(self.N+M-1)/(factorial(self.N)*factorial(M-1));
+            D = round(D);
+            H = zeros(D);
+            T = zeros(1,D);
+            for i=1:D
+              tag = Tag(basis(i,:));
+              T(1,i) = tag;
+            end  
+            %[T,indices] = sort(T);
+            %basis = basis(indices,:);
+            for v=1:D
+                v_vect.v = basis(v, :);
+                v_vect.c = 1;      
+                int_term = 0;
+                chem_term = 0;
+                for i=1:M
+                    site = i;
+                    site_adj = i+1;
+                    
+                    vect3 = Num_Op(site, v_vect);
+                    n = vect3.c;
+                    int_term = int_term + n*n-n;
+                    chem_term = chem_term + n;      
+                    
+                    if site == M
+                        if self.bound_cond == BoundCond.open
+                            break;
+                        elseif self.bound_cond == BoundCond.periodic
+                            site_adj = 1;                            
+                        end
+                    end
+
+                    vect1 = Create_Op(site_adj,Annih_Op(site, v_vect));
+                    vect2 = Create_Op(site,Annih_Op(site_adj ,v_vect));
+                    
+                    tag1 = Tag(vect1.v);
+                    tag2 = Tag(vect2.v);
+                    index1 = find(T==tag1);
+                    index2 = find(T==tag2);
+                    H(index1, v) = H(index1, v) - self.t *vect1.c;
+                    H(index2, v) = H(index2, v) - self.t *vect2.c;
+
+                end 
+                H(v,v) = self.U/2*int_term - self.mu*chem_term;  
+            end
+            Hamiltonian = sparse(H);
+            [Gs, Energy] = eigs(Hamiltonian, 1, 'smallestreal'); 
+            
         end
     end
 end
@@ -200,33 +223,11 @@ function y=outerop(a,b,operator)
     end
 end
 
-
-function basis_vectors = Generate_Basis(N,M)
-    D = factorial(N+M-1)/(factorial(N)*factorial(M-1));
-    basis_vectors = zeros(D,M);
-    basis_vectors(1,1) = N;
-    current_row = 1;
-    while basis_vectors(current_row, M) ~= N
-        k = 0;
-        for j = M-1: -1: 1
-            if basis_vectors(current_row, j) > 0
-                k = j;
-                break;
-            end 
-        end 
-        next_row = current_row + 1;
-        for j = 1: M
-            if 1 <= j && j <= k-1
-                basis_vectors(next_row,j) = basis_vectors(current_row,j);
-            elseif j >= k+2
-                basis_vectors(next_row,j) = 0;
-            end
-        end
-        basis_vectors(next_row, k) = basis_vectors(current_row, k) - 1;
-        basis_vectors(next_row, k+1) = N - sum(basis_vectors(next_row, 1:k));
-        current_row = next_row; 
-    end
-end 
+function tag = Tag(basis_vect)
+    M = length(basis_vect);
+    p_vect = 100*(1:M)+3;
+    tag = sum(basis_vect.*sqrt(p_vect),'all'); 
+end
 
 function result = Create_Op(index,vect)
     vect.v(index) = vect.v(index) + 1;
